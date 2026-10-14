@@ -4,6 +4,17 @@ import { chromium } from "playwright-core";
 
 const TINYFISH_API_KEY = process.env.TINYFISH_API_KEY || "";
 
+export interface SeverityScreenshot {
+  id: string;
+  severity: "critical" | "warning" | "info";
+  title: string;
+  description: string;
+  selector: string;
+  elementCount: number;
+  codeFix: string;
+  screenshotBase64: string;
+}
+
 export async function POST(req: NextRequest) {
   let sessionId: string | null = null;
 
@@ -15,7 +26,7 @@ export async function POST(req: NextRequest) {
 
     const normalizedUrl = url.startsWith("http") ? url : `https://${url}`;
 
-    // 1. Create a Remote Browser Session via TinyFish Browser API (3rd Endpoint)
+    // 1. Start TinyFish Cloud Browser Session (3rd Endpoint)
     const sessionRes = await fetch("https://api.browser.tinyfish.ai", {
       method: "POST",
       headers: {
@@ -34,108 +45,226 @@ export async function POST(req: NextRequest) {
     sessionId = sessionData.session_id;
     const cdpUrl = sessionData.cdp_url;
 
-    // 2. Connect to TinyFish's Cloud Chromium via CDP
+    // 2. Connect to TinyFish Cloud Chromium via CDP
     const browser = await chromium.connectOverCDP(cdpUrl);
     const context = browser.contexts()[0] || (await browser.newContext());
     const page = context.pages()[0] || (await context.newPage());
 
-    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(1500); // Let client-side UI settle
+    await page.waitForTimeout(1200);
 
-    // 3. Inject Visual SEO Defect Overlays directly into the live DOM
-    const highlightedDefects = await page.evaluate(() => {
-      const defects: { type: string; count: number }[] = [];
+    // 3. Detect Visual SEO Issues Categorized by Severity
+    const detectedTasks = await page.evaluate(() => {
+      const tasks: {
+        id: string;
+        severity: "critical" | "warning" | "info";
+        title: string;
+        description: string;
+        selector: string;
+        elementCount: number;
+        codeFix: string;
+      }[] = [];
 
-      const badgeElement = (el: HTMLElement, label: string, color: string) => {
-        el.style.outline = `3px solid ${color}`;
-        el.style.outlineOffset = "2px";
-        el.style.position = el.style.position || "relative";
+      // CRITICAL 1: Missing or Multiple H1s
+      const h1s = document.querySelectorAll("h1");
+      if (h1s.length === 0) {
+        tasks.push({
+          id: "crit-missing-h1",
+          severity: "critical",
+          title: "Missing Primary <h1> Heading in Above-the-Fold Viewport",
+          description:
+            "AI chunkers rely on a single H1 to anchor the document's primary topic. No <h1> exists in the live DOM.",
+          selector: "body",
+          elementCount: 0,
+          codeFix: `<h1>Primary Page Topic & Target Keyword</h1>`,
+        });
+      } else if (h1s.length > 1) {
+        tasks.push({
+          id: "crit-multiple-h1",
+          severity: "critical",
+          title: `Multiple Competing <h1> Headings (${h1s.length} Found)`,
+          description:
+            "Multiple H1 tags fragment topical authority when TinyFish Fetch converts DOM hierarchy into Markdown.",
+          selector: "h1",
+          elementCount: h1s.length,
+          codeFix: `<!-- Keep only 1 primary H1 and demote secondary H1s to H2: -->\n<h2>Secondary Section Heading</h2>`,
+        });
+      }
 
-        const badge = document.createElement("div");
-        badge.innerText = label;
-        badge.style.cssText = `
-          position: absolute;
-          top: 0;
-          left: 0;
-          background: ${color};
-          color: #fff;
-          font-family: monospace;
-          font-size: 11px;
-          font-weight: bold;
-          padding: 2px 6px;
-          z-index: 999999;
-          border-radius: 0 0 4px 0;
-          pointer-events: none;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-        `;
-        el.appendChild(badge);
-      };
+      // CRITICAL 2: Missing Semantic <main> or <article> Container
+      const semanticRoot = document.querySelector("main, article, [role='main']");
+      if (!semanticRoot) {
+        tasks.push({
+          id: "crit-no-semantic-main",
+          severity: "critical",
+          title: "Missing Semantic <main> or <article> Wrapper",
+          description:
+            "AI Fetch tools strip non-semantic <div> soup as boilerplate. Wrapping core text in <main> or <article> guarantees extraction.",
+          selector: "body > div:first-of-type, body",
+          elementCount: 1,
+          codeFix: `<main>\n  <article>\n    <!-- Move primary page content here -->\n  </article>\n</main>`,
+        });
+      }
 
-      // Highlight Images Missing Alt Text (Invisible to AI Vision/Fetch)
-      const missingAltImgs = Array.from(
+      // WARNING 1: Images Missing Alt Attributes (Visual AI Blind Spots)
+      const imgsMissingAlt = Array.from(
         document.querySelectorAll("img:not([alt]), img[alt='']")
-      ) as HTMLElement[];
-      missingAltImgs.forEach((img) => badgeElement(img, "MISSING ALT (AI BLIND SPOT)", "#ef4444"));
-      if (missingAltImgs.length > 0) {
-        defects.push({ type: "Images missing alt attribute", count: missingAltImgs.length });
+      ).filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 24 && rect.height > 24;
+      });
+      if (imgsMissingAlt.length > 0) {
+        imgsMissingAlt.forEach((el, i) => el.setAttribute("data-tf-audit", `missing-alt-${i}`));
+        tasks.push({
+          id: "warn-missing-alt",
+          severity: "warning",
+          title: `${imgsMissingAlt.length} Visible Image(s) Missing Alt Text`,
+          description:
+            "TinyFish Fetch and LLM crawlers cannot interpret visual diagrams or product photos without descriptive alt text.",
+          selector: "[data-tf-audit^='missing-alt-']",
+          elementCount: imgsMissingAlt.length,
+          codeFix: `<img src="..." alt="Descriptive explanation of the visual content for AI agents" />`,
+        });
       }
 
-      // Highlight H1 issues (Multiple H1s or verify primary H1 placement)
-      const h1s = Array.from(document.querySelectorAll("h1")) as HTMLElement[];
-      if (h1s.length > 1) {
-        h1s.forEach((h1, idx) =>
-          badgeElement(h1, `DUPLICATE H1 #${idx + 1} (AMBIGUOUS TOPIC)`, "#f59e0b")
-        );
-        defects.push({ type: "Ambiguous multiple <h1> tags", count: h1s.length });
-      } else if (h1s.length === 1) {
-        badgeElement(h1s[0], "PRIMARY H1 (AI CHUNK ANCHOR)", "#10b981");
-      }
-
-      // Highlight Empty / Non-Descriptive Links
+      // WARNING 2: Generic / Empty Link Anchors ("Click here", "Read more", or empty)
       const weakLinks = Array.from(document.querySelectorAll("a")).filter((a) => {
-        const txt = (a.innerText || "").trim().toLowerCase();
-        return !txt || txt === "click here" || txt === "read more" || txt === "more";
-      }) as HTMLElement[];
-      weakLinks.slice(0, 8).forEach((a) => badgeElement(a, "WEAK LINK ANCHOR", "#f97316"));
+        const text = (a.innerText || "").trim().toLowerCase();
+        const aria = a.getAttribute("aria-label") || a.getAttribute("title");
+        const rect = a.getBoundingClientRect();
+        return (
+          rect.width > 10 &&
+          rect.height > 10 &&
+          ((!text && !aria) || ["click here", "read more", "more", "learn more", "link"].includes(text))
+        );
+      });
       if (weakLinks.length > 0) {
-        defects.push({ type: "Non-descriptive or empty link anchors", count: weakLinks.length });
+        weakLinks.forEach((el, i) => el.setAttribute("data-tf-audit-link", `weak-link-${i}`));
+        tasks.push({
+          id: "warn-weak-links",
+          severity: "warning",
+          title: `${weakLinks.length} Non-Descriptive or Empty Link Anchor(s)`,
+          description:
+            "AI agents and crawlers use anchor text to understand the destination URL's context before following links.",
+          selector: "[data-tf-audit-link^='weak-link-']",
+          elementCount: weakLinks.length,
+          codeFix: `<a href="/pricing" aria-label="View Enterprise API Pricing Tiers">View Enterprise API Pricing Tiers</a>`,
+        });
       }
 
-      // Check for missing semantic <main> or <article> container
-      const hasSemanticMain = Boolean(document.querySelector("main, article"));
-      if (!hasSemanticMain && document.body) {
-        const banner = document.createElement("div");
-        banner.innerText =
-          "⚠️ SEO AUDIT WARNING: No <main> or <article> tag found — AI Fetch tools may strip core content as boilerplate";
-        banner.style.cssText = `
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          background: #dc2626;
-          color: white;
-          padding: 10px 16px;
-          font-family: sans-serif;
-          font-size: 13px;
-          font-weight: bold;
-          text-align: center;
-          z-index: 9999999;
-        `;
-        document.body.prepend(banner);
-        defects.push({ type: "Missing semantic <main> / <article> wrapper", count: 1 });
+      // INFO / VERIFIED: Always capture the Primary Heading / Hero Anchor Structure
+      if (h1s.length === 1) {
+        tasks.push({
+          id: "info-h1-anchor",
+          severity: "info",
+          title: "Verified Primary <h1> & Above-the-Fold Topic Anchor",
+          description:
+            "Single primary <h1> cleanly anchors the Markdown document tree for TinyFish Fetch and LLM RAG chunkers.",
+          selector: "h1",
+          elementCount: 1,
+          codeFix: `<!-- H1 structure is valid. Ensure a concise 40-60 word summary paragraph immediately follows this H1. -->`,
+        });
       }
 
-      return defects;
+      return tasks;
     });
 
-    // 4. Take Base64 Screenshot of Annotated Page
-    const buffer = await page.screenshot({ type: "jpeg", quality: 80, fullPage: false });
-    const base64Image = `data:image/jpeg;base64,${buffer.toString("base64")}`;
+    const screenshots: SeverityScreenshot[] = [];
+
+    // 4. Loop Through Each Severity Task, Scroll to Target, Highlight & Capture Screenshot
+    for (const task of detectedTasks.slice(0, 4)) {
+      const color =
+        task.severity === "critical"
+          ? "#ef4444" // Red
+          : task.severity === "warning"
+          ? "#f59e0b" // Amber
+          : "#3b82f6"; // Blue
+
+      // Scroll first matching element into view
+      const locator = page.locator(task.selector).first();
+      if ((await locator.count()) > 0) {
+        await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+      }
+
+      // Inject severity-specific visual overlays into DOM
+      await page.evaluate(
+        ({ selector, label, badgeColor, severity }) => {
+          // Remove previous overlays before taking this specific screenshot
+          document.querySelectorAll(".tf-audit-overlay-badge").forEach((el) => el.remove());
+          document.querySelectorAll("[data-tf-outlined]").forEach((el) => {
+            (el as HTMLElement).style.outline = "";
+            el.removeAttribute("data-tf-outlined");
+          });
+
+          // Top HUD Banner showing which severity issue is pictured
+          const hud = document.createElement("div");
+          hud.className = "tf-audit-overlay-badge";
+          hud.innerText = `[${severity.toUpperCase()}] ${label}`;
+          hud.style.cssText = `
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            background: ${badgeColor};
+            color: #ffffff;
+            padding: 8px 14px;
+            font-family: monospace;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 6px;
+            z-index: 2147483647;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+          `;
+          document.body.appendChild(hud);
+
+          const targets = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+          targets.slice(0, 10).forEach((el, idx) => {
+            el.setAttribute("data-tf-outlined", "true");
+            el.style.outline = `4px solid ${badgeColor}`;
+            el.style.outlineOffset = "3px";
+
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              const tag = document.createElement("div");
+              tag.className = "tf-audit-overlay-badge";
+              tag.innerText = `${severity.toUpperCase()} #${idx + 1}`;
+              tag.style.cssText = `
+                position: fixed;
+                top: ${Math.max(48, rect.top - 22)}px;
+                left: ${Math.max(8, rect.left)}px;
+                background: ${badgeColor};
+                color: #fff;
+                font-family: monospace;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 2px 6px;
+                border-radius: 4px;
+                z-index: 2147483646;
+                pointer-events: none;
+              `;
+              document.body.appendChild(tag);
+            }
+          });
+        },
+        {
+          selector: task.selector,
+          label: task.title,
+          badgeColor: color,
+          severity: task.severity,
+        }
+      );
+
+      const buf = await page.screenshot({ type: "jpeg", quality: 75, fullPage: false });
+      screenshots.push({
+        ...task,
+        screenshotBase64: `data:image/jpeg;base64,${buf.toString("base64")}`,
+      });
+    }
 
     await browser.close();
 
-    // 5. Terminate TinyFish Browser Session cleanly
+    // 5. Cleanly close TinyFish Browser Session
     if (sessionId) {
       await fetch(`https://api.browser.tinyfish.ai/${sessionId}`, {
         method: "DELETE",
@@ -143,10 +272,13 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     }
 
+    // Sort Critical -> Warning -> Info
+    const severityOrder = { critical: 0, warning: 1, info: 2 };
+    screenshots.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
     return NextResponse.json({
       sessionId,
-      screenshot: base64Image,
-      highlightedDefects,
+      screenshots,
     });
   } catch (error: any) {
     if (sessionId) {
@@ -156,7 +288,7 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     }
     return NextResponse.json(
-      { error: error.message || "Failed to capture annotated SEO screenshot" },
+      { error: error.message || "Failed to capture multi-severity SEO screenshots" },
       { status: 500 }
     );
   }

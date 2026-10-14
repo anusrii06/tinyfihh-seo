@@ -19,6 +19,8 @@ import {
   TrendingUp,
   Camera,
   RefreshCw,
+  Maximize2,
+  X,
 } from "lucide-react";
 
 const DEMO_PAGES = [
@@ -53,16 +55,26 @@ export default function AuditDashboard() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"markdown" | "headings">("markdown");
 
-  // Lazy-Loaded TinyFish Browser API Screenshot State
+  // Multi-Severity Screenshot State (Lazy-loaded via TinyFish Browser API)
   const [shotLoading, setShotLoading] = useState(false);
+  const [severityFilter, setSeverityFilter] = useState<"all" | "critical" | "warning" | "info">("all");
+  const [selectedShot, setSelectedShot] = useState<any | null>(null);
   const [shotData, setShotData] = useState<{
     sessionId?: string;
-    screenshot?: string;
-    highlightedDefects?: { type: string; count: number }[];
+    screenshots?: {
+      id: string;
+      severity: "critical" | "warning" | "info";
+      title: string;
+      description: string;
+      selector: string;
+      elementCount: number;
+      codeFix: string;
+      screenshotBase64: string;
+    }[];
     error?: string;
   } | null>(null);
 
-  const triggerLazyScreenshot = async (targetUrl: string) => {
+  const triggerLazyScreenshots = async (targetUrl: string) => {
     setShotLoading(true);
     setShotData(null);
     try {
@@ -72,7 +84,7 @@ export default function AuditDashboard() {
         body: JSON.stringify({ url: targetUrl }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Browser screenshot failed");
+      if (!res.ok) throw new Error(data.error || "Browser screenshot capture failed");
       setShotData(data);
     } catch (err: any) {
       setShotData({ error: err.message });
@@ -98,8 +110,8 @@ export default function AuditDashboard() {
       if (!res.ok) throw new Error(data.error || "Audit failed");
       setReport(data);
 
-      // Fire TinyFish Browser API Screenshot on Lazy Load right after main report renders!
-      triggerLazyScreenshot(targetUrl);
+      // Fire Lazy-Loaded Multi-Severity Screenshots via TinyFish Browser API
+      triggerLazyScreenshots(targetUrl);
     } catch (err: any) {
       setError(err.message || "Something went wrong while running the live audit.");
     } finally {
@@ -119,6 +131,19 @@ export default function AuditDashboard() {
     return "text-red-400";
   };
 
+  const getSeverityBadgeStyle = (severity: "critical" | "warning" | "info") => {
+    if (severity === "critical")
+      return "bg-red-500/20 text-red-400 border border-red-500/40";
+    if (severity === "warning")
+      return "bg-amber-500/20 text-amber-300 border border-amber-500/40";
+    return "bg-blue-500/20 text-blue-300 border border-blue-500/40";
+  };
+
+  const filteredScreenshots =
+    shotData?.screenshots?.filter(
+      (s) => severityFilter === "all" || s.severity === severityFilter
+    ) || [];
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10 font-sans">
       <div className="max-w-6xl mx-auto space-y-8">
@@ -135,7 +160,7 @@ export default function AuditDashboard() {
               Audits live pages using{" "}
               <code className="text-cyan-400 font-mono">TinyFish Fetch</code> (AI extraction),{" "}
               <code className="text-cyan-400 font-mono">TinyFish Search</code> (SERP &amp; competitor gap), and lazy-loaded{" "}
-              <code className="text-cyan-400 font-mono">TinyFish Browser</code> (visual annotated screenshots of SEO defects).
+              <code className="text-cyan-400 font-mono">TinyFish Browser</code> (multi-severity annotated DOM screenshots).
             </p>
           </div>
         </header>
@@ -225,7 +250,7 @@ export default function AuditDashboard() {
               Running Live Uncached Audit via TinyFish Fetch &amp; Search...
             </div>
             <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Extracting live Markdown (<code className="text-cyan-400">ttl: 0</code>), checking SERP rankings, and queuing lazy-loaded TinyFish Browser visual defect annotations.
+              Extracting live Markdown (<code className="text-cyan-400">ttl: 0</code>), checking SERP rankings, and queuing lazy-loaded TinyFish Browser multi-severity screenshots.
             </p>
           </div>
         )}
@@ -289,36 +314,60 @@ export default function AuditDashboard() {
               </div>
             </div>
 
-            {/* LAZY-LOADED 3RD ENDPOINT: TINYFISH BROWSER VISUAL SEO DEFECT SCREENSHOT */}
-            <section className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-6 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
+            {/* LAZY-LOADED 3RD ENDPOINT: MULTI-SEVERITY ANNOTATED SCREENSHOT GALLERY */}
+            <section className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-6 space-y-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-bold flex items-center gap-2 text-cyan-400">
                     <Camera className="w-5 h-5" />
-                    Live Annotated DOM Screenshot — Places Lacking SEO (
+                    Multi-Severity Visual DOM Audit — Places Lacking SEO (
                     <code className="text-xs">api.browser.tinyfish.ai</code>)
                   </h2>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Lazy-loaded via TinyFish Cloud Browser CDP session. Injects red/amber visual bounding boxes directly onto elements missing alt attributes, duplicate H1s, weak link anchors, or missing semantic wrappers.
+                  <p className="text-xs text-slate-400 mt-1">
+                    Lazy-loaded via a single TinyFish Cloud Browser CDP session. Scrolls to each severity defect, outlines offending DOM nodes in Red (Critical), Amber (Warning), or Blue (Info), and captures targeted viewports.
                   </p>
                 </div>
 
-                <button
-                  onClick={() => triggerLazyScreenshot(report.url)}
-                  disabled={shotLoading}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-cyan-300 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${shotLoading ? "animate-spin" : ""}`} />
-                  {shotLoading ? "Annotating Live DOM..." : "Re-Capture Screenshot"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Severity Filter Pills */}
+                  {shotData?.screenshots && shotData.screenshots.length > 0 && (
+                    <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                      {(["all", "critical", "warning", "info"] as const).map((sev) => (
+                        <button
+                          key={sev}
+                          onClick={() => setSeverityFilter(sev)}
+                          className={`px-2.5 py-1 rounded-lg uppercase font-semibold transition cursor-pointer ${
+                            severityFilter === sev
+                              ? "bg-slate-800 text-cyan-400"
+                              : "text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          {sev}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => triggerLazyScreenshots(report.url)}
+                    disabled={shotLoading}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-cyan-300 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${shotLoading ? "animate-spin" : ""}`} />
+                    {shotLoading ? "Capturing DOM..." : "Re-Capture"}
+                  </button>
+                </div>
               </div>
 
               {shotLoading && (
-                <div className="p-8 bg-slate-950 border border-slate-800 rounded-xl text-center space-y-2 animate-pulse">
-                  <Camera className="w-6 h-6 text-cyan-400 mx-auto animate-bounce" />
-                  <div className="text-xs font-medium text-slate-300">
-                    Spinning up TinyFish Cloud Browser (<code className="text-cyan-400">cdp_url</code>) &amp; highlighting lacking SEO elements...
+                <div className="p-10 bg-slate-950 border border-slate-800 rounded-xl text-center space-y-2 animate-pulse">
+                  <Camera className="w-7 h-7 text-cyan-400 mx-auto animate-bounce" />
+                  <div className="text-sm font-medium text-slate-200">
+                    Spinning up TinyFish Cloud Browser (<code className="text-cyan-400">cdp_url</code>) &amp; capturing screenshots by issue severity...
                   </div>
+                  <p className="text-xs text-slate-500">
+                    Scrolling to missing alt images, duplicate H1s, weak link anchors, and semantic containers.
+                  </p>
                 </div>
               )}
 
@@ -328,42 +377,76 @@ export default function AuditDashboard() {
                 </div>
               )}
 
-              {shotData?.screenshot && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-                  <div className="lg:col-span-8 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
-                    <img
-                      src={shotData.screenshot}
-                      alt="Annotated SEO Defects Screenshot"
-                      className="w-full h-auto object-cover"
-                    />
-                  </div>
-                  <div className="lg:col-span-4 bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
-                    <div className="font-semibold text-white uppercase tracking-wider">
-                      Visual Annotations Injected
-                    </div>
-                    {shotData.highlightedDefects && shotData.highlightedDefects.length > 0 ? (
-                      <ul className="space-y-2">
-                        {shotData.highlightedDefects.map((d, i) => (
-                          <li
-                            key={i}
-                            className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 flex items-center justify-between"
-                          >
-                            <span>{d.type}</span>
-                            <span className="font-bold px-2 py-0.5 bg-red-500/20 rounded">
-                              {d.count}x
+              {shotData?.screenshots && !shotLoading && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {filteredScreenshots.map((shot) => (
+                    <div
+                      key={shot.id}
+                      className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden flex flex-col justify-between"
+                    >
+                      <div>
+                        {/* Annotated Image Preview */}
+                        <div
+                          className="relative group cursor-pointer border-b border-slate-800 bg-slate-900"
+                          onClick={() => setSelectedShot(shot)}
+                        >
+                          <img
+                            src={shot.screenshotBase64}
+                            alt={shot.title}
+                            className="w-full h-56 object-cover object-top group-hover:opacity-90 transition"
+                          />
+                          <div className="absolute top-3 right-3 bg-slate-950/80 backdrop-blur px-2.5 py-1 rounded-lg text-[11px] text-slate-200 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                            <Maximize2 className="w-3 h-3 text-cyan-400" /> Expand Full Viewport
+                          </div>
+                        </div>
+
+                        {/* Issue Metadata */}
+                        <div className="p-4 space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`px-2.5 py-0.5 text-[11px] font-bold uppercase rounded-full ${getSeverityBadgeStyle(
+                                shot.severity
+                              )}`}
+                            >
+                              {shot.severity}
                             </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
-                        Primary H1 verified in green. Zero broken visual DOM elements detected in the above-the-fold viewport!
+                            <span className="text-xs font-mono text-slate-400">
+                              Selector: <code className="text-cyan-400">{shot.selector}</code> ({shot.elementCount}x)
+                            </span>
+                          </div>
+
+                          <h3 className="font-semibold text-sm text-white">{shot.title}</h3>
+                          <p className="text-xs text-slate-400 leading-relaxed">{shot.description}</p>
+                        </div>
                       </div>
-                    )}
-                    <div className="text-[11px] text-slate-500 pt-2 border-t border-slate-800">
-                      Session ID: <code className="text-slate-400">{shotData.sessionId}</code>
+
+                      {/* Drop-in Code Fix inside each Screenshot Card */}
+                      <div className="px-4 pb-4">
+                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span>DOM Fix</span>
+                            <button
+                              onClick={() => copyCode(shot.id, shot.codeFix)}
+                              className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                            >
+                              {copiedId === shot.id ? (
+                                <>
+                                  <Check className="w-3 h-3" /> Copied
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" /> Copy Snippet
+                                </>
+                              )}
+                            </button>
+                          </div>
+                          <pre className="text-[11px] text-cyan-300 font-mono overflow-x-auto whitespace-pre-wrap">
+                            <code>{shot.codeFix}</code>
+                          </pre>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
               )}
             </section>
@@ -392,13 +475,9 @@ export default function AuditDashboard() {
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5">
                           <span
-                            className={`px-2.5 py-0.5 text-xs font-bold uppercase rounded-full ${
-                              fix.severity === "critical"
-                                ? "bg-red-500/20 text-red-400 border border-red-500/30"
-                                : fix.severity === "warning"
-                                ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
-                            }`}
+                            className={`px-2.5 py-0.5 text-xs font-bold uppercase rounded-full ${getSeverityBadgeStyle(
+                              fix.severity
+                            )}`}
                           >
                             {fix.severity}
                           </span>
@@ -602,6 +681,43 @@ export default function AuditDashboard() {
                 ))}
               </div>
             </section>
+          </div>
+        )}
+
+        {/* LIGHTBOX MODAL FOR FULL-SIZE ANNOTATED SCREENSHOT */}
+        {selectedShot && (
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setSelectedShot(null)}
+          >
+            <div
+              className="max-w-5xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl space-y-4 p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className={`px-2.5 py-0.5 text-xs font-bold uppercase rounded-full ${getSeverityBadgeStyle(
+                      selectedShot.severity
+                    )}`}
+                  >
+                    {selectedShot.severity}
+                  </span>
+                  <h3 className="font-bold text-white text-base">{selectedShot.title}</h3>
+                </div>
+                <button
+                  onClick={() => setSelectedShot(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <img
+                src={selectedShot.screenshotBase64}
+                alt={selectedShot.title}
+                className="w-full max-h-[75vh] object-contain rounded-xl border border-slate-800 bg-slate-950"
+              />
+            </div>
           </div>
         )}
       </div>
