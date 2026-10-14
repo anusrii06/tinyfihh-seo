@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { FormEvent } from "react";
+import Image from "next/image";
 import {
   Activity,
   ArrowDownToLine,
   ArrowRight,
+  Camera,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -15,13 +17,50 @@ import {
   Globe2,
   Layers3,
   LoaderCircle,
+  Maximize2,
   Moon,
   Search,
   Sun,
+  X,
   XCircle,
 } from "lucide-react";
 
 type Theme = "dark" | "light";
+type ScreenshotSeverity = "critical" | "warning" | "info";
+
+type SeverityScreenshot = {
+  id: string;
+  severity: ScreenshotSeverity;
+  title: string;
+  description: string;
+  selector: string;
+  elementCount: number;
+  codeFix: string;
+  screenshotBase64: string;
+};
+
+function getThemeSnapshot(): Theme {
+  if (typeof window === "undefined") return "dark";
+  const saved = window.localStorage.getItem("tinyfish-theme");
+  if (saved === "dark" || saved === "light") return saved;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function getThemeServerSnapshot(): Theme {
+  return "dark";
+}
+
+function subscribeToTheme(callback: () => void) {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  window.addEventListener("storage", callback);
+  window.addEventListener("tinyfish-theme-change", callback);
+  media.addEventListener("change", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("tinyfish-theme-change", callback);
+    media.removeEventListener("change", callback);
+  };
+}
 
 type AuditFix = {
   id: string;
@@ -145,19 +184,15 @@ export default function AuditDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"markdown" | "headings">("markdown");
-  const [theme, setTheme] = useState<Theme>("dark");
-
-  useEffect(() => {
-    const savedTheme = window.localStorage.getItem("tinyfish-theme");
-    const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const initialTheme =
-      savedTheme === "dark" || savedTheme === "light"
-        ? savedTheme
-        : systemPrefersDark
-          ? "dark"
-          : "light";
-    setTheme(initialTheme);
-  }, []);
+  const theme = useSyncExternalStore(
+    subscribeToTheme,
+    getThemeSnapshot,
+    getThemeServerSnapshot
+  );
+  const [shotLoading, setShotLoading] = useState(false);
+  const [shotData, setShotData] = useState<{ screenshots?: SeverityScreenshot[]; error?: string } | null>(null);
+  const [severityFilter, setSeverityFilter] = useState<"all" | ScreenshotSeverity>("all");
+  const [selectedShot, setSelectedShot] = useState<SeverityScreenshot | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -166,12 +201,14 @@ export default function AuditDashboard() {
   const toggleTheme = () => {
     const nextTheme = theme === "dark" ? "light" : "dark";
     window.localStorage.setItem("tinyfish-theme", nextTheme);
-    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.dispatchEvent(new Event("tinyfish-theme-change"));
   };
 
   const handleAudit = async (targetUrl: string, targetQuery: string, includeAgent: boolean) => {
     setLoading(true);
     setError(null);
+    setShotData(null);
     try {
       const response = await fetch("/api/audit", {
         method: "POST",
@@ -194,6 +231,29 @@ export default function AuditDashboard() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const captureScreenshots = async (targetUrl: string) => {
+    setShotLoading(true);
+    setShotData(null);
+    setError(null);
+    try {
+      const response = await fetch("/api/screenshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: targetUrl }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Screenshot capture could not be completed.");
+      setShotData(data);
+      setSeverityFilter("all");
+    } catch (caughtError) {
+      setShotData({
+        error: caughtError instanceof Error ? caughtError.message : "Screenshot capture failed.",
+      });
+    } finally {
+      setShotLoading(false);
     }
   };
 
@@ -226,6 +286,11 @@ export default function AuditDashboard() {
       setError("Clipboard access is unavailable. Select and copy the code instead.");
     }
   };
+
+  const filteredScreenshots =
+    shotData?.screenshots?.filter(
+      (screenshot) => severityFilter === "all" || screenshot.severity === severityFilter
+    ) ?? [];
 
   return (
     <main className="app-shell">
@@ -559,6 +624,103 @@ export default function AuditDashboard() {
               </div>
             </section>
 
+            <section className="screenshot-section" aria-labelledby="visual-audit-title">
+              <div className="screenshot-header">
+                <div>
+                  <div className="section-kicker">OPTIONAL VISUAL AUDIT</div>
+                  <h3 id="visual-audit-title">Annotated page screenshots</h3>
+                  <p>
+                    Start a separate browser capture to inspect visual examples of selected SEO findings.
+                    This uses an additional remote browser request.
+                  </p>
+                </div>
+                <button
+                  className="capture-button"
+                  type="button"
+                  onClick={() => void captureScreenshots(report.url)}
+                  disabled={shotLoading}
+                >
+                  {shotLoading ? <LoaderCircle size={15} className="spin" /> : <Camera size={15} />}
+                  {shotLoading ? "Capturing" : shotData?.screenshots ? "Capture again" : "Capture screenshots"}
+                </button>
+              </div>
+
+              {shotLoading && (
+                <div className="screenshot-status" role="status" aria-live="polite">
+                  <LoaderCircle size={16} className="spin" />
+                  <span>Opening a remote browser and capturing up to four issue views…</span>
+                </div>
+              )}
+
+              {shotData?.error && <div className="screenshot-error" role="alert">{shotData.error}</div>}
+
+              {shotData?.screenshots && !shotLoading && (
+                <>
+                  <div className="screenshot-toolbar">
+                    <span>{shotData.screenshots.length} capture{shotData.screenshots.length === 1 ? "" : "s"}</span>
+                    <div className="severity-filter" role="group" aria-label="Filter screenshot findings">
+                      {(["all", "critical", "warning", "info"] as const).map((severity) => (
+                        <button
+                          className={severityFilter === severity ? "is-active" : ""}
+                          key={severity}
+                          type="button"
+                          onClick={() => setSeverityFilter(severity)}
+                          aria-pressed={severityFilter === severity}
+                        >
+                          {severity}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {filteredScreenshots.length > 0 ? (
+                    <div className="screenshot-gallery">
+                      {filteredScreenshots.map((screenshot) => (
+                        <article className="screenshot-card" key={screenshot.id}>
+                          <button
+                            className="screenshot-preview"
+                            type="button"
+                            onClick={() => setSelectedShot(screenshot)}
+                            aria-label={"View screenshot: " + screenshot.title}
+                          >
+                            <Image
+                              src={screenshot.screenshotBase64}
+                              alt=""
+                              width={1280}
+                              height={800}
+                              unoptimized
+                              loading="lazy"
+                            />
+                            <span><Maximize2 size={14} /> Expand view</span>
+                          </button>
+                          <div className="screenshot-card-body">
+                            <div className="screenshot-card-meta">
+                              <span className={"severity severity--" + screenshot.severity}>{screenshot.severity}</span>
+                              <code>{screenshot.elementCount} element{screenshot.elementCount === 1 ? "" : "s"}</code>
+                            </div>
+                            <h4>{screenshot.title}</h4>
+                            <p>{screenshot.description}</p>
+                            <div className="screenshot-selector"><span>Selector</span><code>{screenshot.selector}</code></div>
+                            <div className="screenshot-code">
+                              <div>
+                                <span>Suggested snippet</span>
+                                <button type="button" onClick={() => void copyCode("shot-" + screenshot.id, screenshot.codeFix)}>
+                                  {copiedId === "shot-" + screenshot.id ? <Check size={13} /> : <Clipboard size={13} />}
+                                  {copiedId === "shot-" + screenshot.id ? "Copied" : "Copy"}
+                                </button>
+                              </div>
+                              <pre><code>{screenshot.codeFix}</code></pre>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="screenshot-empty">No screenshot findings match this filter.</p>
+                  )}
+                </>
+              )}
+            </section>
+
             <section className="search-section" aria-labelledby="search-results-title">
               <div className="section-heading">
                 <div>
@@ -611,7 +773,7 @@ export default function AuditDashboard() {
               )}
             </section>
 
-            {report.tinyfishAgent && (
+            {report.tinyfishAgent !== null && report.tinyfishAgent !== undefined && (
               <section className="agent-result">
                 <div className="section-kicker">OPTIONAL INTERACTIVE CHECK</div>
                 <h3>Interactive page findings</h3>
@@ -619,6 +781,42 @@ export default function AuditDashboard() {
                 <pre>{JSON.stringify(report.tinyfishAgent, null, 2)}</pre>
               </section>
             )}
+          </div>
+        )}
+
+        {selectedShot && (
+          <div
+            className="screenshot-lightbox"
+            role="presentation"
+            onClick={() => setSelectedShot(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setSelectedShot(null);
+            }}
+          >
+            <div
+              className="screenshot-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="screenshot-dialog-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="screenshot-dialog-heading">
+                <div>
+                  <span className={"severity severity--" + selectedShot.severity}>{selectedShot.severity}</span>
+                  <h2 id="screenshot-dialog-title">{selectedShot.title}</h2>
+                </div>
+                <button type="button" onClick={() => setSelectedShot(null)} aria-label="Close screenshot">
+                  <X size={18} />
+                </button>
+              </div>
+              <Image
+                src={selectedShot.screenshotBase64}
+                alt={"Annotated page: " + selectedShot.title}
+                width={1280}
+                height={800}
+                unoptimized
+              />
+            </div>
           </div>
         )}
 
