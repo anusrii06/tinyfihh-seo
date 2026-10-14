@@ -1,59 +1,157 @@
 // src/app/page.tsx
 "use client";
 
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import {
-  Search,
-  FileCode2,
-  AlertTriangle,
+  Activity,
+  ArrowDownToLine,
   ArrowRight,
-  Copy,
   Check,
-  Sparkles,
-  Globe,
-  Layers,
-  ExternalLink,
   CheckCircle2,
+  ChevronDown,
+  Clipboard,
+  ExternalLink,
+  FileCode2,
+  Globe2,
+  Layers3,
+  LoaderCircle,
+  Moon,
+  Search,
+  Sun,
   XCircle,
-  Cpu,
-  TrendingUp,
   Camera,
   RefreshCw,
   Maximize2,
   X,
+  TrendingUp,
 } from "lucide-react";
+
+type Theme = "dark" | "light";
+
+type AuditFix = {
+  id: string;
+  severity: "critical" | "warning" | "info";
+  category: string;
+  title: string;
+  impact: string;
+  evidence: string;
+  codeFix?: string;
+};
+
+type AuditReport = {
+  url: string;
+  domain: string;
+  effectiveQuery: string;
+  scores: {
+    overall: number;
+    aiReadability: number;
+    searchVisibility: number;
+  };
+  siteAuditSeoMetrics: {
+    status: number;
+    request_time_ms: number;
+    title: string;
+    description: string;
+    canonical: string;
+    robots: string;
+    h1_count: number;
+    h2_count: number;
+    h3_count: number;
+    images: number;
+    images_without_alt: number;
+    schema_types: string[];
+    text_ratio_percent: number;
+    html_size_kb: number;
+    raw_word_count: number;
+  };
+  tinyfishFetch: {
+    ai_word_count: number;
+    survival_rate_percent: number;
+    extracted_headings: string[];
+    markdown_preview: string;
+    error?: { error?: string } | null;
+  };
+  tinyfishSearch: {
+    exact_rank: number | null;
+    domain_rank: number | null;
+    is_domain_indexed: boolean;
+    top_serp_results: Array<{
+      url: string;
+      title: string;
+      snippet: string;
+      position: number;
+    }>;
+    competitor_benchmark?: {
+      url: string;
+      title: string;
+      wordCount: number;
+      headings: string[];
+    } | null;
+  };
+  tinyfishAgent?: unknown;
+  fixes: AuditFix[];
+};
 
 const DEMO_PAGES = [
   {
-    label: "TinyFish Docs (Clean SSR)",
+    label: "TinyFish Docs",
     url: "https://docs.tinyfish.ai/fetch-api",
     query: "web agent fetch api markdown extraction",
   },
   {
-    label: "Wikipedia (Dense Semantic HTML)",
+    label: "Wikipedia",
     url: "https://en.wikipedia.org/wiki/Search_engine_optimization",
     query: "what is search engine optimization",
   },
   {
-    label: "Hacker News (Minimal Table DOM)",
+    label: "Hacker News",
     url: "https://news.ycombinator.com",
     query: "tech startup news aggregator",
   },
   {
-    label: "Next.js Docs (Hybrid RSC)",
+    label: "Next.js Docs",
     url: "https://nextjs.org/docs",
     query: "react server components framework documentation",
   },
 ];
 
+function normalizeUrl(value: string) {
+  const trimmed = value.trim();
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : "https://" + trimmed;
+  const parsed = new URL(candidate);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Enter a web address that starts with http:// or https://.");
+  }
+  return parsed.toString();
+}
+
+function scoreTone(score: number) {
+  if (score >= 80) return "score-value--good";
+  if (score >= 50) return "score-value--medium";
+  return "score-value--low";
+}
+
+function isOwnDomain(resultUrl: string, domain: string) {
+  try {
+    const host = new URL(resultUrl).hostname.replace(/^www\./, "").toLowerCase();
+    const normalizedDomain = domain.replace(/^www\./, "").toLowerCase();
+    return host === normalizedDomain || host.endsWith("." + normalizedDomain);
+  } catch {
+    return false;
+  }
+}
+
 export default function AuditDashboard() {
   const [url, setUrl] = useState("https://docs.tinyfish.ai/fetch-api");
   const [query, setQuery] = useState("web agent fetch api markdown extraction");
+  const [runAgentAudit, setRunAgentAudit] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [report, setReport] = useState<any>(null);
+  const [report, setReport] = useState<AuditReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"markdown" | "headings">("markdown");
+  const [theme, setTheme] = useState<Theme>("dark");
 
   // Multi-Severity Screenshot State (Lazy-loaded via TinyFish Browser API)
   const [shotLoading, setShotLoading] = useState(false);
@@ -74,6 +172,28 @@ export default function AuditDashboard() {
     error?: string;
   } | null>(null);
 
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("tinyfish-theme");
+    const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const initialTheme =
+      savedTheme === "dark" || savedTheme === "light"
+        ? savedTheme
+        : systemPrefersDark
+        ? "dark"
+        : "light";
+    setTheme(initialTheme);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  const toggleTheme = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    window.localStorage.setItem("tinyfish-theme", nextTheme);
+    setTheme(nextTheme);
+  };
+
   const triggerLazyScreenshots = async (targetUrl: string) => {
     setShotLoading(true);
     setShotData(null);
@@ -93,42 +213,66 @@ export default function AuditDashboard() {
     }
   };
 
-  const handleAudit = async (targetUrl = url, targetQuery = query) => {
+  const handleAudit = async (targetUrl: string, targetQuery: string, includeAgent: boolean) => {
     setLoading(true);
     setError(null);
     setShotData(null);
     try {
-      const res = await fetch("/api/audit", {
+      const response = await fetch("/api/audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: targetUrl,
           query: targetQuery,
+          runAgentAudit: includeAgent,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Audit failed");
-      setReport(data);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "The audit could not be completed.");
+      setReport(data as AuditReport);
+      setActiveTab("markdown");
 
       // Fire Lazy-Loaded Multi-Severity Screenshots via TinyFish Browser API
       triggerLazyScreenshots(targetUrl);
-    } catch (err: any) {
-      setError(err.message || "Something went wrong while running the live audit.");
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Something went wrong while running the audit."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const copyCode = (id: string, code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    let normalized: string;
+    try {
+      normalized = normalizeUrl(url);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Enter a valid web address.");
+      return;
+    }
+    setUrl(normalized);
+    void handleAudit(normalized, query.trim(), runAgentAudit);
   };
 
-  const getScoreColor = (score: number) => {
-    if (score >= 80) return "text-emerald-400";
-    if (score >= 50) return "text-amber-400";
-    return "text-red-400";
+  const runPreset = (preset: (typeof DEMO_PAGES)[number]) => {
+    setUrl(preset.url);
+    setQuery(preset.query);
+    setError(null);
+    void handleAudit(preset.url, preset.query, runAgentAudit);
+  };
+
+  const copyCode = async (id: string, code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setError("Clipboard access is unavailable. Select and copy the code instead.");
+    }
   };
 
   const getSeverityBadgeStyle = (severity: "critical" | "warning" | "info") => {
@@ -145,191 +289,198 @@ export default function AuditDashboard() {
     ) || [];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10 font-sans">
-      <div className="max-w-6xl mx-auto space-y-8">
-        {/* HEADER */}
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-6">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-medium mb-3">
-              <Sparkles className="w-3.5 h-3.5" /> TinyFish × DTU Workshop Build (200-Pt 3-Endpoint Architecture)
-            </div>
-            <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-white">
-              AI Search &amp; Readability SEO Auditor
-            </h1>
-            <p className="text-slate-400 mt-1 text-sm md:text-base max-w-3xl">
-              Audits live pages using{" "}
-              <code className="text-cyan-400 font-mono">TinyFish Fetch</code> (AI extraction),{" "}
-              <code className="text-cyan-400 font-mono">TinyFish Search</code> (SERP &amp; competitor gap), and lazy-loaded{" "}
-              <code className="text-cyan-400 font-mono">TinyFish Browser</code> (multi-severity annotated DOM screenshots).
-            </p>
+    <main className="app-shell">
+      <div className="page-frame">
+        <header className="topbar">
+          <a className="brand" href="#" aria-label="TinyFish SEO Auditor home">
+            <span className="brand-mark" aria-hidden="true">
+              <Activity size={17} strokeWidth={2.3} />
+            </span>
+            <span className="brand-name">TinyFish <span>/</span> Audit</span>
+          </a>
+          <div className="topbar-actions">
+            <span className="system-label"><span className="live-dot" /> Live analysis</span>
+            <button
+              className="theme-toggle"
+              type="button"
+              onClick={toggleTheme}
+              aria-label={"Switch to " + (theme === "dark" ? "light" : "dark") + " mode"}
+              title={"Switch to " + (theme === "dark" ? "light" : "dark") + " mode"}
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+              <span>{theme === "dark" ? "Light" : "Dark"} mode</span>
+            </button>
           </div>
         </header>
 
-        {/* INPUT FORM & DEMO PRESETS */}
-        <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-xl">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-            <div className="md:col-span-5">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Target Live Page URL *
-              </label>
-              <div className="relative">
-                <Globe className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
-                <input
-                  type="text"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://example.com/page"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-            </div>
-
-            <div className="md:col-span-5">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Target Search Query (Optional)
-              </label>
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Auto-derived from H1/Title if left blank"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-            </div>
-
-            <div className="md:col-span-2 flex items-end">
-              <button
-                onClick={() => handleAudit(url, query)}
-                disabled={loading}
-                className="w-full py-2.5 px-4 bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-semibold rounded-xl text-sm transition flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {loading ? "Auditing..." : "Audit Page"}
-                {!loading && <ArrowRight className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Quick Demo Presets */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-slate-800/80 text-xs">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-slate-400 font-medium">One-Click Real Demo Pages:</span>
-              {DEMO_PAGES.map((preset) => (
-                <button
-                  key={preset.url}
-                  onClick={() => {
-                    setUrl(preset.url);
-                    setQuery(preset.query);
-                    handleAudit(preset.url, preset.query);
-                  }}
-                  disabled={loading}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer disabled:opacity-50"
-                >
-                  {preset.label}
-                </button>
-              ))}
+        <section className="intro">
+          <div className="eyebrow"><span className="eyebrow-line" /> SEARCH &amp; AI READABILITY</div>
+          <div className="intro-row">
+            <div>
+              <h1>See how your page<br className="desktop-break" /> gets understood.</h1>
+              <p className="intro-copy">
+                Audits live pages using TinyFish Fetch (AI extraction), TinyFish Search (SERP &amp; competitor gap), and lazy-loaded TinyFish Browser (multi-severity annotated DOM screenshots).
+              </p>
             </div>
           </div>
         </section>
 
-        {/* ERROR BANNER */}
+        <section className="audit-panel" aria-labelledby="audit-form-title">
+          <div className="panel-heading">
+            <div>
+              <div className="section-kicker">NEW AUDIT</div>
+              <h2 id="audit-form-title">Choose a page to inspect</h2>
+            </div>
+            <span className="panel-index">01 <span>/</span> INPUT</span>
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <div className="form-grid">
+              <div className="field field--url">
+                <label htmlFor="target-url">Page URL <span className="required-mark">Required</span></label>
+                <div className="input-wrap">
+                  <Globe2 size={17} aria-hidden="true" />
+                  <input
+                    id="target-url"
+                    name="url"
+                    type="text"
+                    inputMode="url"
+                    autoComplete="url"
+                    spellCheck={false}
+                    required
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    placeholder="https://example.com/page"
+                    aria-describedby="url-help"
+                  />
+                </div>
+                <p className="field-help" id="url-help">A domain without a protocol is treated as HTTPS.</p>
+              </div>
+              <div className="field field--query">
+                <label htmlFor="target-query">Search query <span className="optional-mark">Optional</span></label>
+                <div className="input-wrap">
+                  <Search size={17} aria-hidden="true" />
+                  <input
+                    id="target-query"
+                    name="query"
+                    type="text"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Derived from page title if blank"
+                  />
+                </div>
+                <p className="field-help">Used to compare your page with live search results.</p>
+              </div>
+              <button className="primary-button" type="submit" disabled={loading}>
+                {loading ? <LoaderCircle size={17} className="spin" /> : <ArrowRight size={17} />}
+                <span>{loading ? "Auditing page" : "Run audit"}</span>
+              </button>
+            </div>
+
+            <div className="form-footer">
+              <div className="demo-pages">
+                <span className="demo-label">Try a sample</span>
+                {DEMO_PAGES.map((preset) => (
+                  <button
+                    className="demo-chip"
+                    key={preset.url}
+                    type="button"
+                    onClick={() => runPreset(preset)}
+                    disabled={loading}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </form>
+        </section>
+
         {error && (
-          <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-center gap-3">
-            <XCircle className="w-5 h-5 text-red-400 shrink-0" />
+          <div className="notice notice--error" role="alert">
+            <XCircle size={18} />
             <span>{error}</span>
+            <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">Dismiss</button>
           </div>
         )}
 
-        {/* LOADING SKELETON */}
         {loading && (
-          <div className="p-12 bg-slate-900/50 border border-slate-800 rounded-2xl text-center space-y-3 animate-pulse">
-            <Cpu className="w-8 h-8 text-cyan-400 mx-auto animate-spin" />
-            <div className="text-base font-semibold text-white">
-              Running Live Uncached Audit via TinyFish Fetch &amp; Search...
+          <div className="progress-panel" role="status" aria-live="polite">
+            <div className="progress-icon"><LoaderCircle size={19} className="spin" /></div>
+            <div>
+              <strong>Collecting live audit data</strong>
+              <p>Extracting live Markdown, checking SERP rankings, and generating multi-severity screenshots. This can take a little while.</p>
             </div>
-            <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Extracting live Markdown (<code className="text-cyan-400">ttl: 0</code>), checking SERP rankings, and queuing lazy-loaded TinyFish Browser multi-severity screenshots.
-            </p>
           </div>
         )}
 
-        {/* AUDIT RESULTS */}
-        {report && !loading && (
-          <div className="space-y-8">
-            {/* SCORE CARDS */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                <span className="text-xs uppercase font-semibold text-slate-400">
-                  Overall AI SEO Score
-                </span>
-                <div className={`text-4xl font-bold mt-2 ${getScoreColor(report.scores.overall)}`}>
-                  {report.scores.overall}/100
-                </div>
-                <p className="text-xs text-slate-400 mt-2">
-                  Weighted composite of AI readability (55%) &amp; live search visibility (45%).
-                </p>
+        {report && (
+          <div className="results" aria-live="polite">
+            <div className="results-heading">
+              <div>
+                <div className="section-kicker">AUDIT REPORT</div>
+                <h2>Findings</h2>
               </div>
-
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                <span className="text-xs uppercase font-semibold text-slate-400">
-                  AI Readability (Fetch API)
-                </span>
-                <div className={`text-4xl font-bold mt-2 ${getScoreColor(report.scores.aiReadability)}`}>
-                  {report.scores.aiReadability}/100
-                </div>
-                <p className="text-xs text-slate-400 mt-2">
-                  <strong>{report.tinyfishFetch.ai_word_count} words</strong> &amp;{" "}
-                  <strong>{report.tinyfishFetch.extracted_headings.length} headings</strong> survived extraction ({report.tinyfishFetch.survival_rate_percent}% survival rate).
-                </p>
-              </div>
-
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                <span className="text-xs uppercase font-semibold text-slate-400">
-                  Search Visibility (Search API)
-                </span>
-                <div className={`text-4xl font-bold mt-2 ${getScoreColor(report.scores.searchVisibility)}`}>
-                  {report.scores.searchVisibility}/100
-                </div>
-                <p className="text-xs text-slate-400 mt-2">
-                  {report.tinyfishSearch.exact_rank
-                    ? `Ranks #${report.tinyfishSearch.exact_rank} for "${report.effectiveQuery}"`
-                    : report.tinyfishSearch.is_domain_indexed
-                    ? "Domain is indexed, but misses Top 10 for target query"
-                    : "Domain not found in Top 10 results"}
-                </p>
-              </div>
-
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                <span className="text-xs uppercase font-semibold text-slate-400">
-                  Same-Day Fixes
-                </span>
-                <div className="text-4xl font-bold mt-2 text-amber-400">
-                  {report.fixes.length} {report.fixes.length === 1 ? "Issue" : "Issues"}
-                </div>
-                <p className="text-xs text-slate-400 mt-2">
-                  Copy-pasteable HTML, JSON-LD Schema, and content gap fixes below.
-                </p>
+              <div className="report-target">
+                <span className="report-host">{report.domain}</span>
+                <a href={report.url} target="_blank" rel="noreferrer" aria-label="Open audited page in a new tab">
+                  Open page <ExternalLink size={13} />
+                </a>
               </div>
             </div>
+
+            <section className="score-grid" aria-label="Audit scores">
+              <article className="score-card score-card--primary">
+                <div className="score-label">Overall score</div>
+                <div className={"score-value " + scoreTone(report.scores.overall)}>
+                  {report.scores.overall}<span>/100</span>
+                </div>
+                <p>Weighted view of readability and search visibility.</p>
+              </article>
+              <article className="score-card">
+                <div className="score-label">AI readability</div>
+                <div className={"score-value " + scoreTone(report.scores.aiReadability)}>
+                  {report.scores.aiReadability}<span>/100</span>
+                </div>
+                <p>{report.tinyfishFetch.ai_word_count} extracted words · {report.tinyfishFetch.survival_rate_percent}% survival</p>
+              </article>
+              <article className="score-card">
+                <div className="score-label">Search visibility</div>
+                <div className={"score-value " + scoreTone(report.scores.searchVisibility)}>
+                  {report.scores.searchVisibility}<span>/100</span>
+                </div>
+                <p>
+                  {report.tinyfishSearch.exact_rank
+                    ? "Page ranks #" + report.tinyfishSearch.exact_rank + " for “" + report.effectiveQuery + "”"
+                    : report.tinyfishSearch.is_domain_indexed
+                    ? "Domain appears in results; target page was not found."
+                    : "No matching domain result was found."}
+                </p>
+              </article>
+              <article className="score-card">
+                <div className="score-label">Recommended fixes</div>
+                <div className="score-value score-value--neutral">
+                  {report.fixes.length}<span>{report.fixes.length === 1 ? " item" : " items"}</span>
+                </div>
+                <p>Prioritized by severity and audit evidence.</p>
+              </article>
+            </section>
 
             {/* LAZY-LOADED 3RD ENDPOINT: MULTI-SEVERITY ANNOTATED SCREENSHOT GALLERY */}
-            <section className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-6 space-y-5">
+            <section className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-6 space-y-5 my-8">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-bold flex items-center gap-2 text-cyan-400">
-                    <Camera className="w-5 h-5" />
-                    Multi-Severity Visual DOM Audit — Places Lacking SEO (
-                    <code className="text-xs">api.browser.tinyfish.ai</code>)
-                  </h2>
+                  <div className="section-kicker text-cyan-400">TINYFISH BROWSER API</div>
+                  <h3 className="text-lg font-bold flex items-center gap-2 text-white">
+                    <Camera className="w-5 h-5 text-cyan-400" />
+                    Multi-Severity Visual DOM Audit — Places Lacking SEO
+                  </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Lazy-loaded via a single TinyFish Cloud Browser CDP session. Scrolls to each severity defect, outlines offending DOM nodes in Red (Critical), Amber (Warning), or Blue (Info), and captures targeted viewports.
+                    Lazy-loaded via a single TinyFish Cloud Browser CDP session. Outlines offending DOM nodes in Red (Critical), Amber (Warning), or Blue (Info).
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {/* Severity Filter Pills */}
                   {shotData?.screenshots && shotData.screenshots.length > 0 && (
                     <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                       {(["all", "critical", "warning", "info"] as const).map((sev) => (
@@ -363,11 +514,8 @@ export default function AuditDashboard() {
                 <div className="p-10 bg-slate-950 border border-slate-800 rounded-xl text-center space-y-2 animate-pulse">
                   <Camera className="w-7 h-7 text-cyan-400 mx-auto animate-bounce" />
                   <div className="text-sm font-medium text-slate-200">
-                    Spinning up TinyFish Cloud Browser (<code className="text-cyan-400">cdp_url</code>) &amp; capturing screenshots by issue severity...
+                    Spinning up TinyFish Cloud Browser &amp; capturing screenshots by issue severity...
                   </div>
-                  <p className="text-xs text-slate-500">
-                    Scrolling to missing alt images, duplicate H1s, weak link anchors, and semantic containers.
-                  </p>
                 </div>
               )}
 
@@ -385,7 +533,6 @@ export default function AuditDashboard() {
                       className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden flex flex-col justify-between"
                     >
                       <div>
-                        {/* Annotated Image Preview */}
                         <div
                           className="relative group cursor-pointer border-b border-slate-800 bg-slate-900"
                           onClick={() => setSelectedShot(shot)}
@@ -400,7 +547,6 @@ export default function AuditDashboard() {
                           </div>
                         </div>
 
-                        {/* Issue Metadata */}
                         <div className="p-4 space-y-2.5">
                           <div className="flex items-center justify-between gap-2">
                             <span
@@ -415,12 +561,11 @@ export default function AuditDashboard() {
                             </span>
                           </div>
 
-                          <h3 className="font-semibold text-sm text-white">{shot.title}</h3>
+                          <h4 className="font-semibold text-sm text-white">{shot.title}</h4>
                           <p className="text-xs text-slate-400 leading-relaxed">{shot.description}</p>
                         </div>
                       </div>
 
-                      {/* Drop-in Code Fix inside each Screenshot Card */}
                       <div className="px-4 pb-4">
                         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-1.5">
                           <div className="flex items-center justify-between text-[11px] text-slate-400">
@@ -435,7 +580,7 @@ export default function AuditDashboard() {
                                 </>
                               ) : (
                                 <>
-                                  <Copy className="w-3 h-3" /> Copy Snippet
+                                  <Clipboard className="w-3 h-3" /> Copy Snippet
                                 </>
                               )}
                             </button>
@@ -451,235 +596,172 @@ export default function AuditDashboard() {
               )}
             </section>
 
-            {/* ACTIONABLE FIXES (PRIORITIZED) */}
-            <section className="space-y-4">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
-                Same-Day Actionable Fixes (Connecting AI Readability to Search Ranking)
-              </h2>
-
+            <section className="findings-section" aria-labelledby="fixes-title">
+              <div className="section-heading">
+                <div>
+                  <div className="section-kicker">WHAT TO ADDRESS</div>
+                  <h3 id="fixes-title">Recommended fixes</h3>
+                </div>
+                <span className="section-count">{report.fixes.length.toString().padStart(2, "0")}</span>
+              </div>
               {report.fixes.length === 0 ? (
-                <div className="p-6 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center gap-3 text-emerald-300 text-sm">
-                  <CheckCircle2 className="w-5 h-5 shrink-0" />
-                  <span>
-                    Zero critical readability or visibility blockers detected! Your page is cleanly structured for AI extraction and ranks well for its target query.
-                  </span>
+                <div className="empty-success">
+                  <CheckCircle2 size={19} />
+                  <div>
+                    <strong>No fixes were generated for this audit.</strong>
+                    <p>Review the supporting metrics below; an empty fix list is not a guarantee of complete SEO coverage.</p>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-4">
-                  {report.fixes.map((fix: any) => (
-                    <div
-                      key={fix.id}
-                      className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            className={`px-2.5 py-0.5 text-xs font-bold uppercase rounded-full ${getSeverityBadgeStyle(
-                              fix.severity
-                            )}`}
-                          >
-                            {fix.severity}
-                          </span>
-                          <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
-                            {fix.category}
-                          </span>
-                          <h3 className="font-semibold text-base text-white">{fix.title}</h3>
+                <div className="fix-list">
+                  {report.fixes.map((fix, index) => (
+                    <article className="fix-card" key={fix.id}>
+                      <div className="fix-number">{(index + 1).toString().padStart(2, "0")}</div>
+                      <div className="fix-content">
+                        <div className="fix-meta">
+                          <span className={"severity severity--" + fix.severity}>{fix.severity}</span>
+                          <span className="category-label">{fix.category}</span>
                         </div>
-                      </div>
-
-                      <p className="text-sm text-slate-300">{fix.impact}</p>
-
-                      <div className="text-xs font-mono bg-slate-950/90 border border-slate-800/80 p-3 rounded-lg text-slate-400">
-                        <strong className="text-slate-200">Live Audit Evidence:</strong> {fix.evidence}
-                      </div>
-
-                      {fix.codeFix && (
-                        <div className="relative mt-3">
-                          <div className="flex items-center justify-between bg-slate-950 px-4 py-2 rounded-t-xl border border-b-0 border-slate-800 text-xs text-slate-400">
-                            <span>Recommended Drop-in Code Fix</span>
-                            <button
-                              onClick={() => copyCode(fix.id, fix.codeFix)}
-                              className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 cursor-pointer"
-                            >
-                              {copiedId === fix.id ? (
-                                <>
-                                  <Check className="w-3.5 h-3.5" /> Copied
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="w-3.5 h-3.5" /> Copy Fix
-                                </>
-                              )}
-                            </button>
+                        <h4>{fix.title}</h4>
+                        <p className="fix-impact">{fix.impact}</p>
+                        <details className="evidence-details">
+                          <summary>Audit evidence <ChevronDown size={14} /></summary>
+                          <p>{fix.evidence}</p>
+                        </details>
+                        {fix.codeFix && (
+                          <div className="code-fix">
+                            <div className="code-fix-heading">
+                              <span><FileCode2 size={14} /> Suggested code</span>
+                              <button type="button" onClick={() => void copyCode(fix.id, fix.codeFix || "")}>
+                                {copiedId === fix.id ? <Check size={14} /> : <Clipboard size={14} />}
+                                {copiedId === fix.id ? "Copied" : "Copy"}
+                              </button>
+                            </div>
+                            <pre><code>{fix.codeFix}</code></pre>
                           </div>
-                          <pre className="p-4 bg-slate-950 border border-slate-800 rounded-b-xl text-xs text-cyan-300 overflow-x-auto font-mono">
-                            <code>{fix.codeFix}</code>
-                          </pre>
-                        </div>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    </article>
                   ))}
                 </div>
               )}
             </section>
 
-            {/* SIDE-BY-SIDE: RAW DOM (viasite/site-audit-seo) VS TINYFISH FETCH */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <section className="detail-section" aria-labelledby="details-title">
+              <div className="section-heading">
                 <div>
-                  <h3 className="text-lg font-bold flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-cyan-400" />
-                    Raw HTML Baseline (<code className="text-xs text-slate-400">site-audit-seo</code> Metrics)
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    What traditional non-JS crawlers see in the raw server HTML response.
-                  </p>
+                  <div className="section-kicker">SUPPORTING DATA</div>
+                  <h3 id="details-title">Page diagnostics</h3>
                 </div>
-
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block">HTTP Status &amp; Latency</span>
-                    <strong className="text-sm text-white">
-                      {report.siteAuditSeoMetrics.status} ({report.siteAuditSeoMetrics.request_time_ms} ms)
-                    </strong>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block">Text-to-HTML Ratio</span>
-                    <strong className="text-sm text-white">
-                      {report.siteAuditSeoMetrics.text_ratio_percent}% ({report.siteAuditSeoMetrics.html_size_kb} KB)
-                    </strong>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block">Raw DOM vs. AI Word Count</span>
-                    <strong className="text-sm text-white">
-                      {report.siteAuditSeoMetrics.raw_word_count} raw / {report.tinyfishFetch.ai_word_count} AI words
-                    </strong>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block">Heading Counts (H1 / H2 / H3)</span>
-                    <strong className="text-sm text-white">
-                      {report.siteAuditSeoMetrics.h1_count} / {report.siteAuditSeoMetrics.h2_count} /{" "}
-                      {report.siteAuditSeoMetrics.h3_count}
-                    </strong>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block">JSON-LD Schema Types</span>
-                    <strong className="text-sm text-white truncate block">
-                      {report.siteAuditSeoMetrics.schema_types.join(", ") || "None (0)"}
-                    </strong>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block">Images Missing Alt Text</span>
-                    <strong className="text-sm text-white">
-                      {report.siteAuditSeoMetrics.images_without_alt} of {report.siteAuditSeoMetrics.images}
-                    </strong>
-                  </div>
-                </div>
+                <span className="section-count"><ArrowDownToLine size={15} /></span>
               </div>
 
-              {/* Right: What TinyFish Fetch Actually Extracts */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-lg font-bold flex items-center gap-2">
-                    <FileCode2 className="w-5 h-5 text-emerald-400" />
-                    TinyFish Fetch Output (<code className="text-xs text-cyan-400">ttl: 0</code>)
-                  </h3>
-                  <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+              <div className="diagnostics-grid">
+                <article className="data-panel">
+                  <div className="data-panel-heading">
+                    <div className="data-icon"><Layers3 size={16} /></div>
+                    <div><h4>Source HTML</h4><p>What a basic HTML fetch returned</p></div>
+                  </div>
+                  <dl className="metric-list">
+                    <div><dt>HTTP status</dt><dd>{report.siteAuditSeoMetrics.status || "Unavailable"}</dd></div>
+                    <div><dt>Response time</dt><dd>{report.siteAuditSeoMetrics.request_time_ms} ms</dd></div>
+                    <div><dt>Visible words</dt><dd>{report.siteAuditSeoMetrics.raw_word_count}</dd></div>
+                    <div><dt>Text / HTML</dt><dd>{report.siteAuditSeoMetrics.text_ratio_percent}% · {report.siteAuditSeoMetrics.html_size_kb} KB</dd></div>
+                    <div><dt>Headings H1 / H2 / H3</dt><dd>{report.siteAuditSeoMetrics.h1_count} / {report.siteAuditSeoMetrics.h2_count} / {report.siteAuditSeoMetrics.h3_count}</dd></div>
+                    <div><dt>Images missing alt</dt><dd>{report.siteAuditSeoMetrics.images_without_alt} of {report.siteAuditSeoMetrics.images}</dd></div>
+                    <div><dt>Structured data</dt><dd>{report.siteAuditSeoMetrics.schema_types.join(", ") || "None detected"}</dd></div>
+                    <div><dt>Canonical</dt><dd className="metric-long">{report.siteAuditSeoMetrics.canonical || "None detected"}</dd></div>
+                    <div><dt>Robots</dt><dd>{report.siteAuditSeoMetrics.robots || "index, follow (default)"}</dd></div>
+                  </dl>
+                </article>
+
+                <article className="data-panel">
+                  <div className="data-panel-heading">
+                    <div className="data-icon data-icon--teal"><FileCode2 size={16} /></div>
+                    <div><h4>Extracted content</h4><p>What TinyFish Fetch returned</p></div>
+                  </div>
+                  <div className="tab-list" role="tablist" aria-label="Extracted content view">
                     <button
+                      className={activeTab === "markdown" ? "tab-button is-active" : "tab-button"}
+                      id="tab-markdown"
+                      tabIndex={activeTab === "markdown" ? 0 : -1}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === "markdown"}
+                      aria-controls="panel-markdown"
                       onClick={() => setActiveTab("markdown")}
-                      className={`px-2.5 py-1 rounded-md transition cursor-pointer ${
-                        activeTab === "markdown"
-                          ? "bg-slate-800 text-white font-medium"
-                          : "text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      Extracted Markdown
-                    </button>
+                    >Markdown</button>
                     <button
+                      className={activeTab === "headings" ? "tab-button is-active" : "tab-button"}
+                      id="tab-headings"
+                      tabIndex={activeTab === "headings" ? 0 : -1}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === "headings"}
+                      aria-controls="panel-headings"
                       onClick={() => setActiveTab("headings")}
-                      className={`px-2.5 py-1 rounded-md transition cursor-pointer ${
-                        activeTab === "headings"
-                          ? "bg-slate-800 text-white font-medium"
-                          : "text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      Headings ({report.tinyfishFetch.extracted_headings.length})
-                    </button>
+                    >Headings <span>{report.tinyfishFetch.extracted_headings.length}</span></button>
                   </div>
-                </div>
-
-                {activeTab === "markdown" ? (
-                  <pre className="p-4 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 h-64 overflow-y-auto whitespace-pre-wrap font-mono">
-                    {report.tinyfishFetch.markdown_preview ||
-                      "No Markdown content could be extracted by TinyFish Fetch."}
-                  </pre>
-                ) : (
-                  <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 h-64 overflow-y-auto space-y-1.5 font-mono">
-                    {report.tinyfishFetch.extracted_headings.map((h: string, idx: number) => (
-                      <div key={idx} className="text-cyan-300">
-                        {h}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                  {activeTab === "markdown" ? (
+                    <pre className="extract-preview" id="panel-markdown" role="tabpanel" aria-labelledby="tab-markdown">
+                      {report.tinyfishFetch.markdown_preview || "No Markdown content was extracted."}
+                    </pre>
+                  ) : (
+                    <div className="extract-preview heading-preview" id="panel-headings" role="tabpanel" aria-labelledby="tab-headings">
+                      {report.tinyfishFetch.extracted_headings.length > 0
+                        ? report.tinyfishFetch.extracted_headings.map((heading, index) => <div key={index}>{heading}</div>)
+                        : <p>No semantic Markdown headings were extracted.</p>}
+                    </div>
+                  )}
+                </article>
               </div>
-            </div>
+            </section>
 
-            {/* TINYFISH SEARCH SERP & COMPETITOR BENCHMARK */}
-            <section className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
-              <h3 className="text-lg font-bold flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-cyan-400" />
-                TinyFish Search Visibility &amp; #1 Competitor Gap (
-                <code className="text-xs text-cyan-400">api.search.tinyfish.ai</code>)
-              </h3>
-
+            <section className="search-section" aria-labelledby="search-results-title">
+              <div className="section-heading">
+                <div>
+                  <div className="section-kicker">LIVE SEARCH</div>
+                  <h3 id="search-results-title">Results for “{report.effectiveQuery}”</h3>
+                </div>
+                <span className="section-count"><Search size={15} /></span>
+              </div>
               {report.tinyfishSearch.competitor_benchmark && (
-                <div className="p-4 bg-slate-950 border border-cyan-500/30 rounded-xl text-xs space-y-2">
-                  <div className="text-cyan-400 font-semibold uppercase tracking-wider flex items-center justify-between">
-                    <span>#1 Ranking Competitor Benchmark (Extracted via TinyFish Fetch)</span>
-                    <a
-                      href={report.tinyfishSearch.competitor_benchmark.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-cyan-400 hover:underline"
-                    >
-                      Inspect Competitor <ExternalLink className="w-3 h-3" />
+                <div className="competitor-note">
+                  <div className="competitor-title">Top competitor comparison</div>
+                  <p>
+                    <a href={report.tinyfishSearch.competitor_benchmark.url} target="_blank" rel="noreferrer">
+                      {report.tinyfishSearch.competitor_benchmark.title || report.tinyfishSearch.competitor_benchmark.url}
+                      <ExternalLink size={13} />
                     </a>
-                  </div>
-                  <p className="text-slate-300">
-                    <strong>{report.tinyfishSearch.competitor_benchmark.title}</strong> ranks #1 with{" "}
-                    <strong className="text-emerald-400">
-                      {report.tinyfishSearch.competitor_benchmark.wordCount} AI-readable words
-                    </strong>{" "}
-                    compared to your{" "}
-                    <strong className="text-cyan-400">{report.tinyfishFetch.ai_word_count} words</strong>.
+                    <span>{report.tinyfishSearch.competitor_benchmark.wordCount} extracted words compared with {report.tinyfishFetch.ai_word_count} on this page.</span>
                   </p>
                 </div>
               )}
-
-              <div className="space-y-2.5">
-                {report.tinyfishSearch.top_serp_results.map((item: any) => (
-                  <div
-                    key={item.url}
-                    className="p-3.5 rounded-xl border bg-slate-950 border-slate-800 flex items-start justify-between gap-4 text-xs"
-                  >
-                    <div className="space-y-1">
-                      <span className="font-bold text-cyan-400 mr-2">#{item.position}</span>
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-semibold text-white hover:underline"
-                      >
-                        {item.title}
-                      </a>
-                      <p className="text-slate-400">{item.snippet}</p>
-                      <span className="text-slate-500 text-[11px] block">{item.url}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {report.tinyfishSearch.top_serp_results.length > 0 ? (
+                <ol className="serp-list">
+                  {report.tinyfishSearch.top_serp_results.map((result) => {
+                    const ownDomain = isOwnDomain(result.url, report.domain);
+                    return (
+                      <li className={ownDomain ? "serp-item serp-item--own" : "serp-item"} key={result.url}>
+                        <span className="serp-position">{String(result.position).padStart(2, "0")}</span>
+                        <div className="serp-content">
+                          <div className="serp-title-row">
+                            <a href={result.url} target="_blank" rel="noreferrer">{result.title || result.url}</a>
+                            {ownDomain && <span className="own-result">Your domain</span>}
+                          </div>
+                          <p>{result.snippet}</p>
+                          <span className="serp-url">{result.url}</span>
+                        </div>
+                        <a className="serp-open" href={result.url} target="_blank" rel="noreferrer" aria-label="Open search result in a new tab">
+                          <ExternalLink size={15} />
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="no-results">No search results were returned for this query.</p>
+              )}
             </section>
           </div>
         )}
@@ -720,7 +802,12 @@ export default function AuditDashboard() {
             </div>
           </div>
         )}
+
+        <footer className="page-footer">
+          <span>One URL per audit</span>
+          <span>Scores are heuristic summaries; use the evidence and source metrics to guide decisions.</span>
+        </footer>
       </div>
-    </div>
+    </main>
   );
 }
